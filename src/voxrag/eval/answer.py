@@ -21,6 +21,7 @@ only some tokens. It is still a useful RELATIVE measure between configurations, 
 it is used for here; it is not an absolute score to boast about.
 
 CLI: python -m voxrag.eval.answer --per-lang 20 --mode fast
+     python -m voxrag.eval.answer --mode quality,agentic --concurrency 1   # same queries, both
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from typing import Any
 
 from voxrag.contracts import GenerationMode, Lang
 from voxrag.eval.qrels import EvalQuery, balanced_sample, load_qrels
+from voxrag.telemetry import percentile
 
 
 @dataclass
@@ -50,6 +52,8 @@ class AnswerScore:
     refused: bool
     groundedness: float
     latency_ms: float
+    #: Requests this query made to the model server, retries included.
+    llm_calls: int = 0
 
 
 def _content_tokens(text: str) -> list[str]:
@@ -108,6 +112,7 @@ async def evaluate(
     concurrency: int = 4,
 ) -> dict[str, Any]:
     """Run the full harness over graded queries and score the answers."""
+    from voxrag.generate.ollama_gemma import LLM_CALLS
     from voxrag.harness.orchestrator import get_harness
 
     harness = get_harness()
@@ -118,6 +123,9 @@ async def evaluate(
         if not query.gold_answer:
             return None
         async with semaphore:
+            # gather runs each query as its own task, so this counter is this query's alone.
+            calls = [0]
+            LLM_CALLS.set(calls)
             started = time.perf_counter()
             result = await harness.run(text=query.query, lang=query.lang, mode=mode)
             elapsed = (time.perf_counter() - started) * 1000.0
@@ -136,6 +144,7 @@ async def evaluate(
             refused=result.answer.refused,
             groundedness=result.answer.groundedness,
             latency_ms=elapsed,
+            llm_calls=calls[0],
         )
 
     scored = [s for s in await asyncio.gather(*(run_one(q) for q in queries)) if s is not None]
@@ -159,6 +168,9 @@ def summarise(scores: Sequence[AnswerScore], *, mode: GenerationMode) -> dict[st
                 sum(r.groundedness for r in answered) / len(answered) if answered else 0.0
             ),
             "mean_latency_ms": sum(r.latency_ms for r in rows) / n,
+            "p50_latency_ms": percentile([r.latency_ms for r in rows], 50),
+            "p95_latency_ms": percentile([r.latency_ms for r in rows], 95),
+            "llm_calls_per_query": sum(r.llm_calls for r in rows) / n,
         }
 
     langs = sorted({s.lang for s in scores})
@@ -180,7 +192,8 @@ def _report(result: dict[str, Any]) -> None:
 
     o = result["overall"]
     table = Table(title=f"answer quality vs gold Answer ({result['mode']} mode)")
-    for col in ("lang", "n", "ceiling", "F1", "F1|answered", "EM", "refusal", "grounded", "ms"):
+    columns = ("lang", "n", "ceiling", "F1", "F1|answered", "EM", "refusal", "grounded", "ms")
+    for col in (*columns, "p50", "p95", "llm/q"):
         table.add_column(col, justify="right" if col != "lang" else "left")
 
     for lang, row in [*result["per_lang"].items(), ("ALL", o)]:
@@ -196,6 +209,9 @@ def _report(result: dict[str, Any]) -> None:
             f"{row['refusal_rate']:.3f}",
             f"{row['groundedness']:.3f}",
             f"{row['mean_latency_ms']:.0f}",
+            f"{row['p50_latency_ms']:.0f}",
+            f"{row['p95_latency_ms']:.0f}",
+            f"{row['llm_calls_per_query']:.1f}",
         )
 
     console = Console()
@@ -219,16 +235,18 @@ async def _main_async(args: argparse.Namespace) -> int:
     langs = [Lang(x) for x in args.langs.split(",")] if args.langs else None
     queries, _stats = load_qrels(args.docs, langs=langs)
     sample = balanced_sample(queries, args.per_lang)
-    print(f"scoring {len(sample):,} queries ({args.per_lang}/language) in {args.mode} mode\n")
+    names = ",".join(mode.value for mode in args.mode)
+    print(f"scoring {len(sample):,} queries ({args.per_lang}/language) in {names} mode\n")
 
-    result = await evaluate(
-        sample, mode=GenerationMode(args.mode), concurrency=args.concurrency
-    )
-    _report(result)
+    results = []
+    for mode in args.mode:  # one after another, so the modes never share the model server
+        results.append(await evaluate(sample, mode=mode, concurrency=args.concurrency))
+        _report(results[-1])
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    report = results[0] if len(results) == 1 else results
+    out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\nwrote {out}")
     return 0
 
@@ -238,7 +256,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--docs", default="data/docs14.jsonl")
     parser.add_argument("--langs", default=None)
     parser.add_argument("--per-lang", type=int, default=20)
-    parser.add_argument("--mode", default="fast", choices=[m.value for m in GenerationMode])
+    parser.add_argument(
+        "--mode",
+        default=[GenerationMode.FAST],
+        type=lambda value: [GenerationMode(m.strip()) for m in value.split(",")],
+        help="fast, quality or agentic; comma-separate several to score them on the same queries",
+    )
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--out", default="data/eval_answer.json")
     return asyncio.run(_main_async(parser.parse_args(argv)))

@@ -142,7 +142,7 @@ class CrossLanguageRail:
         found = ", ".join(sorted({hit.chunk.lang.value for hit in context}))
         asked = lang.value if lang else "unknown"
 
-        if self.mode is not GenerationMode.QUALITY:
+        if self.mode is GenerationMode.FAST:
             # FAST is extractive: it copies sentences out of the passages, so an English
             # question answered from Odia evidence would return Odia text the asker cannot
             # read, and there is no model in the FAST path to verify it with either.

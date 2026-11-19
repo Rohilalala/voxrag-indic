@@ -547,7 +547,7 @@ async def _handle_answer(payload: AnswerInput, trace: Trace, ctx: Any) -> Answer
     try:
         generator = await _generator(mode)
     except Exception as exc:
-        if mode is GenerationMode.QUALITY:
+        if mode is not GenerationMode.FAST:
             # Let the orchestrator decide: its policy is QUALITY -> FAST, and FAST has a
             # local fallback below, so escalating here still ends in an answer.
             raise
@@ -572,13 +572,13 @@ async def _handle_answer(payload: AnswerInput, trace: Trace, ctx: Any) -> Answer
     # subsequent query -- turning a per-request degradation into a global one.
     invoke_guarded = (
         (lambda: get_breaker("generate:quality").call(invoke))
-        if mode is GenerationMode.QUALITY
+        if mode is not GenerationMode.FAST
         else invoke
     )
     try:
         answer = await invoke_guarded()
     except Exception as exc:
-        if mode is GenerationMode.QUALITY:
+        if mode is not GenerationMode.FAST:
             raise
         trace.degrade(f"{mode.value} generation failed ({type(exc).__name__}); extractive fallback")
         return _extractive_answer(payload.query, context, payload.lang)

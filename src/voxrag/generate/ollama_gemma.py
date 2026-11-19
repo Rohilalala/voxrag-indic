@@ -26,6 +26,7 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator, Sequence
+from contextvars import ContextVar
 from typing import Any
 
 import httpx
@@ -89,6 +90,13 @@ _VERDICT_RE = regex.compile(r"^\W*(yes|no)\b", regex.IGNORECASE)
 #: them: a model that completes the refusal line in an Indic script terminates it with those,
 #: not with ".", and the refusal would then not compare equal.
 _TRAILING_PUNCT = " .।۔"  # noqa: RUF001 -- these ARE the Indic terminators, not typos
+
+#: Token budget for `rewrite`: one search query on one line.
+_REWRITE_MAX_TOKENS = 64
+
+#: Model-server requests made in the current async context, retries included. The answer eval
+#: sets a fresh counter per query to report LLM calls per query; serving never sets it.
+LLM_CALLS: ContextVar[list[int] | None] = ContextVar("llm_calls", default=None)
 
 
 class GenerationError(RuntimeError):
@@ -317,6 +325,8 @@ class OllamaGenerator:
     async def _request_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         last: Exception | None = None
         for attempt in range(settings.max_retries + 1):
+            if (calls := LLM_CALLS.get()) is not None:
+                calls[0] += 1
             try:
                 client = await self._get_client()
                 response = await client.post(self._url(path), json=payload)
@@ -469,6 +479,39 @@ class OllamaGenerator:
             return None
         return match.group(1).casefold() == "yes"
 
+    async def rewrite(self, query: str) -> str | None:
+        """A search query for `query`, or None if the model could not give one.
+
+        AGENTIC mode calls this when no retrieved passage was graded relevant. Same contract
+        as `entails`: every unclear outcome is None, and the caller stops rewriting.
+        """
+        if not query.strip() or not await self.health():
+            return None
+        payload = {
+            "model": self._model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Rewrite the question as a search query for a passage index. Keep its "
+                        "language and script, and keep every name, number and key term. Reply "
+                        "with the query only, on one line."
+                    ),
+                },
+                {"role": "user", "content": query},
+            ],
+            "stream": False,
+            "think": settings.ollama_think,
+            "options": {"temperature": 0.0, "num_predict": _REWRITE_MAX_TOKENS},
+        }
+        try:
+            data = await self._request_json("/api/chat", payload)
+        except GenerationError:
+            return None
+        lines = _extract_content(data).strip().splitlines()
+        rewritten = lines[0].strip(" \"'") if lines else ""
+        return rewritten[: settings.max_query_chars] or None
+
     def _schedule_preload(self) -> None:
         """Finish the aborted load in the background, detached from the cancelled request.
 
@@ -556,4 +599,4 @@ class OllamaGenerator:
         )
 
 
-__all__ = ["GenerationError", "OllamaGenerator", "groundedness", "parse_citations"]
+__all__ = ["LLM_CALLS", "GenerationError", "OllamaGenerator", "groundedness", "parse_citations"]

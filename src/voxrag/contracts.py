@@ -111,6 +111,10 @@ class StageName(str, Enum):
     RETRIEVE_LEXICAL = "retrieve_lexical"
     FUSE = "fuse"
     RERANK = "rerank"
+    #: AGENTIC only: the model judges whether each passage answers the question.
+    GRADE = "grade"
+    #: AGENTIC only: the model rewrites the query after no passage was judged relevant.
+    REWRITE = "rewrite"
     GENERATE = "generate"
     OUTPUT_GUARDRAIL = "output_guardrail"
     TOTAL = "total"
@@ -123,6 +127,9 @@ class GenerationMode(str, Enum):
     FAST = "fast"
     #: Abstractive via gemma4:e4b. Better prose, reported with its own latency profile.
     QUALITY = "quality"
+    #: QUALITY inside a corrective loop (`harness/agentic.py`): grade the passages, rewrite the
+    #: query when none answer it, regenerate once when the output rails reject the answer.
+    AGENTIC = "agentic"
 
 
 class RefusalReason(str, Enum):

@@ -327,10 +327,10 @@ def _post_retrieval_timeout_ms(mode: GenerationMode) -> float | None:
     cross-language rail into an allow on every English query -- the exact unverified answer it
     exists to stop, reported as if the rail had run.
 
-    Only QUALITY mode with verification on can make that call at all; every other path returns
-    None, stays on the 25ms ceiling and pays nothing.
+    Only the model-backed modes (QUALITY, AGENTIC) with verification on can make that call at
+    all; every other path returns None, stays on the 25ms ceiling and pays nothing.
     """
-    if mode is not GenerationMode.QUALITY or not settings.cross_language_verification:
+    if mode is GenerationMode.FAST or not settings.cross_language_verification:
         return None
     return settings.cross_language_timeout_ms + _CROSS_LANGUAGE_SLACK_MS
 
@@ -547,6 +547,20 @@ class Harness:
             if blocked is not None:
                 return await self._refuse(req, blocked)
 
+            # 3-7. AGENTIC runs the stages below as a graph that can loop over them.
+            if req.mode is GenerationMode.AGENTIC:
+                try:
+                    from voxrag.harness.agentic import run_graph
+                except ModuleNotFoundError:  # langgraph is the optional `agent` extra
+                    req.trace.degrade("agentic mode needs the `agent` extra; serving quality")
+                    req.mode = GenerationMode.QUALITY
+                else:
+                    outcome = await run_graph(self, req)
+                    if isinstance(outcome, GuardrailVerdict):
+                        return await self._refuse(req, outcome)
+                    await self._emit(req, "answer", outcome.text, outcome.mode.value)
+                    return await self._seal(req, outcome)
+
             # 3. retrieval -----------------------------------------------------------------
             retrieval = await self._retrieve(req)
             req.retrieved = list(retrieval.chunks)
@@ -577,6 +591,7 @@ class Harness:
 
             # 6. generation ----------------------------------------------------------------
             answer = await self._generate(req)
+            await self._emit(req, "token", answer.text, None)
             await self._flush(req)
 
             # 7. output rails --------------------------------------------------------------
@@ -720,8 +735,11 @@ class Harness:
             req.lang = module.detected_lang(verdicts) or req.lang
         return blocking
 
-    async def _retrieve(self, req: _Request) -> RetrievalResult:
-        """Embed + dense + lexical + fuse, through the validated tool boundary."""
+    async def _retrieve(self, req: _Request, query: str | None = None) -> RetrievalResult:
+        """Embed + dense + lexical + fuse, through the validated tool boundary.
+
+        `query` overrides the request's own text; the agentic graph retrieves with rewrites.
+        """
         indexed = set(settings.ingest_langs)
         # Filter by language only when the index is known to hold that language. A wrong
         # guess inside a script family (Hindi vs Marathi) would otherwise filter every
@@ -731,7 +749,7 @@ class Harness:
             # Clamped, not rejected: with guardrails disabled nothing has trimmed this yet,
             # and RetrieveInput enforces the same ceiling by raising. The encoder truncates
             # at 192 tokens anyway, so the tail could not have influenced retrieval.
-            "query": req.query_text[: settings.max_query_chars],
+            "query": (query or req.query_text)[: settings.max_query_chars],
             "lang": filter_lang,
             "top_k": settings.fuse_top_k,
         }
@@ -823,11 +841,21 @@ class Harness:
                 req.trace.degrade(f"rerank failed ({type(exc).__name__}); using fused order")
                 return req.retrieved
 
-    async def _generate(self, req: _Request) -> Answer:
-        """Generate through the tool layer, degrading QUALITY -> FAST -> extractive."""
-        context = req.retrieved[: settings.context_top_k]
+    async def _generate(
+        self,
+        req: _Request,
+        *,
+        query: str | None = None,
+        context: list[ScoredChunk] | None = None,
+    ) -> Answer:
+        """Generate through the tool layer, degrading QUALITY -> FAST -> extractive.
+
+        `query` and `context` default to the request's own; the agentic graph passes the
+        question with the output rails' feedback, and the passages its grader kept.
+        """
+        context = req.retrieved[: settings.context_top_k] if context is None else context
         payload: dict[str, Any] = {
-            "query": req.query_text,
+            "query": query or req.query_text,
             "chunk_ids": [scored.chunk.chunk_id for scored in context],
             "mode": req.mode,
             "lang": req.lang,
@@ -840,7 +868,7 @@ class Harness:
                     # The abstractive path talks to a model server over HTTP and is worth
                     # retrying; the fast path is local, deterministic, and a second identical
                     # attempt would only spend budget.
-                    attempts=settings.max_retries + 1 if req.mode is GenerationMode.QUALITY else 1,
+                    attempts=settings.max_retries + 1 if req.mode is not GenerationMode.FAST else 1,
                     trace=req.trace,
                     stage=StageName.GENERATE,
                 )
@@ -851,7 +879,7 @@ class Harness:
                 req.trace.degrade(
                     f"{req.mode.value} generation failed ({type(exc).__name__}); serving fast mode"
                 )
-                payload["mode"] = GenerationMode.FAST
+                payload.update(mode=GenerationMode.FAST, query=req.query_text)
                 try:
                     # The fast path falls back to the harness's own extractive answer
                     # internally, so this call effectively cannot fail -- but if it does,
@@ -871,14 +899,14 @@ class Harness:
                 model=answer.model,
                 refused=answer.refused,
             )
-
-        await self._emit(req, "token", answer.text, None)
         return answer
 
-    async def _output_phase(self, req: _Request, answer: Answer) -> Answer:
+    async def _output_phase(
+        self, req: _Request, answer: Answer, context: list[ScoredChunk] | None = None
+    ) -> Answer:
         """Output rails. A blocking verdict replaces the answer with a refusal -- the whole
         point of a groundedness check is that the ungrounded text never reaches the user."""
-        context = req.retrieved[: settings.context_top_k]
+        context = req.retrieved[: settings.context_top_k] if context is None else context
         verdicts, blocking = await self._rails(
             req,
             "OUTPUT_RAILS",

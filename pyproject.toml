@@ -43,6 +43,11 @@ dev = [
     "ruff>=0.7",
     "mypy>=1.13",
     "respx>=0.21",
+    # the hermetic suite covers agentic mode too
+    "voxrag[agent]",
+]
+agent = [
+    "langgraph>=1.2.23",
 ]
 
 [project.scripts]
