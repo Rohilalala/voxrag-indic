@@ -20,7 +20,7 @@ All numbers come from this code, measured on the full 14-language index.
 | **Language routing** (40 real queries per language, no hint) | detection **99.6%** · refusal rate 5.7% |
 | **Grounding rail** (474 on-topic + 474 off-topic pairs) | catches **82.3%** of off-topic evidence at 4.4% false refusals |
 | **Answers, fast mode** (n = 168) | groundedness **1.000** · token F1 0.208 against an extractive ceiling of 0.684 |
-| **Tests** | 635 passing, hermetic: no network, no Qdrant, no model needed |
+| **Tests** | 650 passing, hermetic: no network, no Qdrant, no model needed |
 
 Retrieval is modest in absolute terms because MS MARCO grades one passage per query. Answer F1 is limited by the extractive generator, not by retrieval: perfect span selection tops out at 0.684 on this data.
 
@@ -32,6 +32,7 @@ Retrieval is modest in absolute terms because MS MARCO grades one passage per qu
 - **Eight chunking strategies,** benchmarked against MSMARCO-XI's own relevance labels and scored at document level, so fragmenting a document cannot inflate recall. `metadata_aware` is locked off by a test because it leaked the evaluation query into the index.
 - **Guardrails.** Input rails for empty queries, unsupported languages, unsafe requests, prompt injection, personal data and off-topic intent; entity grounding after retrieval; output rails for groundedness, citations and refusal consistency. Refusals name the rail that fired.
 - **Two answer modes.** `fast` copies cited spans from retrieved passages and stays inside the budget. `quality` uses `gemma4:e4b` through Ollama with `[n]` citations (about 0.9 s per answer on CPU) and falls back to `fast` if the model is down.
+- **Agentic mode.** A third mode, `agentic`, runs `quality` inside a LangGraph state machine. The model grades each passage it would answer from YES or NO, rewrites the query and retrieves again when no passage passes (at most twice), and regenerates once with the output rails' reason when an answer is rejected as ungrounded. Every node lands in the same per-stage trace, and a dead model degrades to the extractive answer. It ships as the optional `agent` extra (`uv sync --extra agent`), which `dev` includes.
 - **A real harness.** Typed tools validated with pydantic, per-stage timeouts, jittered retries, circuit breakers and graceful degradation: a dead vector store returns a refusal with timings intact, a dead BM25 index runs dense-only. Every request carries a per-stage trace.
 - **Evaluation.** Recall@k, MRR, nDCG, answer F1 against its ceiling, guardrail precision and recall, and paired significance tests, so a tuning change ships only when it beats run-to-run noise.
 
@@ -61,6 +62,7 @@ API: `POST /api/query` · `POST /api/voice` · `GET /api/analytics` · `GET /api
 ```bash
 uv run pytest -q                                              # hermetic test suite
 uv run python -m voxrag.eval                                  # guardrails + retrieval + answers
+uv run python -m voxrag.eval.answer --mode quality,agentic --concurrency 1   # same queries, both modes
 uv run python -m voxrag.eval.retrieval --strategies all --modes dense,lexical,hybrid
 uv run voxrag bench --n 500                                   # p50 / p70 / p100 against the budget
 uv run voxrag bench --n 500 --compare                         # fast vs quality on identical queries
@@ -85,7 +87,7 @@ src/voxrag/
   store/       Qdrant, HNSW, Indic-aware BM25, RRF fusion
   guardrails/  input, post-retrieval and output rails
   generate/    extractive (fast) and gemma4 (quality), both cited
-  harness/     orchestrator, typed tools, retries, breakers, degradation
+  harness/     orchestrator, agentic graph, typed tools, retries, breakers, degradation
   bench/       latency percentiles
   eval/        retrieval, answer, guardrail and significance evaluation
   api/         FastAPI + WebSocket
