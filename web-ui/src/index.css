@@ -1,0 +1,188 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* The app is dark, always. `<html>` carries `class="dark"` from index.html so every
+   `dark:` utility inside the shadcn components resolves, and `:root` carries the dark
+   palette as well so nothing outside that subtree can flash white. */
+
+@theme inline {
+    /* No webfont. Every family below is either installed by the OS or shipped with it,
+       and the chain is the feature: the Noto entries are what stop Devanagari, Bengali,
+       Tamil, Telugu, Kannada, Malayalam, Gujarati, Gurmukhi, Odia and Urdu from
+       rendering as tofu boxes. A CDN font would also be one more thing to hang on
+       conference wifi. */
+    --font-sans:
+        system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', 'Noto Sans Devanagari',
+        'Noto Sans Bengali', 'Noto Sans Tamil', 'Noto Sans Telugu', 'Noto Sans Kannada',
+        'Noto Sans Malayalam', 'Noto Sans Gujarati', 'Noto Sans Gurmukhi', 'Noto Sans Oriya',
+        'Noto Nastaliq Urdu', sans-serif;
+    --font-heading: var(--font-sans);
+    /* Latency readouts and ids: tabular by construction, so numbers do not jitter as they
+       update. Indic fallbacks stay on the end in case a chunk id is not ASCII. */
+    --font-mono:
+        ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono',
+        'Noto Sans Mono', monospace, 'Noto Sans Devanagari', 'Noto Sans Bengali';
+
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    /* Added to the preset: the pipeline has three states the UI has to distinguish --
+       within budget, degraded, failed -- and shadcn only ships `destructive`. */
+    --color-success: var(--success);
+    --color-warning: var(--warning);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* One palette, applied to both selectors. The preset's neutral ramp is kept as-is; the
+   only editorial change is the single accent hue on --primary/--ring, which is the one
+   colour in the interface that is not grey. --accent stays neutral on purpose: shadcn
+   uses it for hover surfaces, and tinting it would put the accent on everything. */
+:root,
+.dark {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.185 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+
+    --primary: oklch(0.789 0.132 195.5);
+    --primary-foreground: oklch(0.17 0.03 200);
+
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+
+    --destructive: oklch(0.704 0.191 22.216);
+    --success: oklch(0.75 0.148 152);
+    --warning: oklch(0.82 0.152 78);
+
+    --border: oklch(1 0 0 / 12%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.789 0.132 195.5);
+
+    --chart-1: oklch(0.789 0.132 195.5);
+    --chart-2: oklch(0.708 0 0);
+    --chart-3: oklch(0.556 0 0);
+    --chart-4: oklch(0.439 0 0);
+    --chart-5: oklch(0.371 0 0);
+
+    --radius: 0.5rem;
+
+    --sidebar: oklch(0.185 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.789 0.132 195.5);
+    --sidebar-primary-foreground: oklch(0.17 0.03 200);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 12%);
+    --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+    * {
+        @apply border-border outline-ring/50;
+    }
+
+    html {
+        @apply font-sans;
+        /* Tells the browser to render form controls and scrollbars dark too. */
+        color-scheme: dark;
+        -webkit-text-size-adjust: 100%;
+    }
+
+    body {
+        @apply bg-background text-foreground;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        /* No synthetic bold/italic: faux-bolding a Devanagari or Nastaliq face smears the
+           conjuncts into an unreadable blur. */
+        font-synthesis: none;
+    }
+
+    /* Latency figures are compared column-to-column; proportional digits make them dance
+       as they update. */
+    .font-mono,
+    code,
+    kbd,
+    samp {
+        font-variant-numeric: tabular-nums;
+    }
+}
+
+@layer components {
+    /* Apply to any element holding retrieved or generated text. Indic scripts stack
+       matras above and below the baseline, so the Latin default line-height clips them;
+       Nastaliq (Urdu) descends further still and needs more room again. */
+    .indic-text {
+        line-height: 1.85;
+        overflow-wrap: anywhere;
+    }
+
+    .indic-text:where([dir='rtl']) {
+        line-height: 2.15;
+    }
+}
+
+@layer utilities {
+    /* The demo is screen-recorded at 1280x720. Any panel that can overflow scrolls in
+       place instead of pushing the mic or the answer off-screen. */
+    .scrollbar-thin {
+        scrollbar-width: thin;
+        scrollbar-color: var(--border) transparent;
+    }
+}
+
+/* A user may have this on system-wide, and the stage waterfall must still be readable
+   when it does: transitions collapse to instant rather than being removed, so nothing
+   depends on an animation that never runs. */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}

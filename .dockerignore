@@ -1,0 +1,15 @@
+.venv/
+data/
+.git/
+.github/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.env
+*.onnx
+tests/
+submission/
+*.mp4
+*.mov

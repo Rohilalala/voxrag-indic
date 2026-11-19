@@ -1,0 +1,69 @@
+# Local Qdrant server for development and for the benchmark.
+#
+# This is not optional decoration. Embedded Qdrant (QdrantClient(path=...)) performs
+# brute-force exact search and ignores both HNSW ef tuning and payload indexes -- it says so
+# in its own runtime warnings. Benchmarking against embedded mode would report a linear scan
+# as if it were an ANN index, so every latency number in the README is measured against this
+# server.
+
+services:
+  qdrant:
+    # PINNED. Do not "fix" the client/server version warning by bumping this.
+    #
+    # qdrant-client 1.19 warns that it is 7 minor versions ahead of this server. Upgrading the
+    # server in place does NOT work: v1.19 cannot read segments written by v1.12, and panics on
+    # startup with
+    #     Failed to deserialize .../segment.json: unknown variant `on_disk`,
+    #     expected `mmap` or `in_ram_mmap`
+    # leaving the container in a crash loop with every collection unreadable. Recovering means
+    # wiping the volume and re-indexing from scratch.
+    #
+    # The mismatch is cosmetic in practice -- 438k chunks indexed and tens of thousands of
+    # searches with no incorrect behaviour. If it ever must be aligned, pin qdrant-client DOWN
+    # in pyproject.toml rather than upgrading the server, or plan a full re-index.
+    image: qdrant/qdrant:v1.12.4
+    container_name: voxrag-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333" # REST
+      - "6334:6334" # gRPC
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    environment:
+      # Search is the hot path and indexing is a one-off, so give search the cores.
+      QDRANT__SERVICE__MAX_REQUEST_SIZE_MB: "64"
+      QDRANT__STORAGE__PERFORMANCE__MAX_SEARCH_THREADS: "4"
+      QDRANT__LOG_LEVEL: "WARN"
+      # -- scale settings -------------------------------------------------------------
+      # Targeting the full validation split in all 14 languages: ~20.8M chunks, which is
+      # 20.8M x 384 x 4B = ~32GB of vectors alone. That cannot sit in RAM on a 24GB laptop
+      # whose Docker VM gets a slice of it, so vectors and payload are memory-mapped and the
+      # OS page cache decides what stays resident. Without these three settings the indexer
+      # dies with an OOM somewhere past the first few million vectors.
+      QDRANT__STORAGE__ON_DISK_PAYLOAD: "true"
+      # Segments above this many KB switch to mmap instead of being held in RAM.
+      QDRANT__STORAGE__OPTIMIZERS__MEMMAP_THRESHOLD_KB: "200000"
+      # HNSW graph stays in RAM. Setting this true was a mistake worth recording: it was
+      # chosen defensively for a 20M-point index that never materialised, and at 2.27M points
+      # it produced a brutal latency tail -- dense search p50 6.8ms but p90 264ms and p100
+      # 302ms, because a page-cache miss during graph traversal goes to disk. That tail blew
+      # the per-stage timeout on most queries, silently degrading the system to lexical-only
+      # retrieval while the median still looked healthy.
+      #
+      # The graph for 2.27M points at m=32 is a few hundred MB and Qdrant was using 1.77GB of
+      # its 7.75GB, so there was never memory pressure to defend against. Payload stays on
+      # disk (it is only read for the final top-k, and it is the bulk of the bytes).
+      QDRANT__STORAGE__HNSW_INDEX__ON_DISK: "false"
+      # More segments => smaller individual optimizer merges => lower peak memory during a
+      # long bulk load, at a small cost in search fan-out.
+      QDRANT__STORAGE__OPTIMIZERS__DEFAULT_SEGMENT_NUMBER: "8"
+    healthcheck:
+      # /readyz reports readiness to serve; / only proves the process is up.
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  qdrant_storage:

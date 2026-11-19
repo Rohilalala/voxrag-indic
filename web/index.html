@@ -1,0 +1,29 @@
+<!doctype html>
+<!-- `class="dark"` is set here rather than by script: it has to be on the element before
+     first paint, or the page flashes white on the projector. -->
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/static/dist/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0a0a0a" />
+    <meta
+      name="description"
+      content="Voice-driven retrieval-augmented generation over 2.27M chunks in 14 Indic languages, with a sub-200ms core latency budget."
+    />
+    <title>VoxRAG — voice RAG across 14 Indic languages</title>
+    <style>
+      /* Painted before the bundle parses, so the first frame is already dark. */
+      html {
+        background: #0a0a0a;
+        color: #fafafa;
+      }
+    </style>
+    <script type="module" crossorigin src="/static/dist/assets/index-zcQ7U3aC.js"></script>
+    <link rel="stylesheet" crossorigin href="/static/dist/assets/index-BKke6SGr.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

@@ -1,0 +1,81 @@
+[project]
+name = "voxrag"
+version = "0.1.0"
+description = "Voice-enabled multilingual RAG over ai4bharat/MSMARCO-XI with a sub-200ms retrieval path"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    # api
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.12",
+    "websockets>=13",
+    "httpx>=0.27",
+    # config / models
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    # data
+    "datasets>=3.0",
+    "pyarrow>=17",
+    "polars>=1.12",
+    # embedding / inference
+    "onnxruntime>=1.20",
+    "tokenizers>=0.20",
+    "huggingface-hub>=0.26",
+    "numpy>=1.26,<3",
+    # vector store
+    "qdrant-client>=1.12",
+    "hnswlib>=0.8",
+    # lexical retrieval
+    "bm25s>=0.2",
+    "PyStemmer>=2.2",
+    # text processing
+    "regex>=2024.9",
+    # observability
+    "structlog>=24.4",
+    "rich>=13.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "ruff>=0.7",
+    "mypy>=1.13",
+    "respx>=0.21",
+]
+
+[project.scripts]
+voxrag = "voxrag.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/voxrag"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# E501  line length is handled by the formatter, not worth failing a build over.
+# B008   FastAPI's Depends()/File() idiom is a function call in a default argument.
+# UP042  suggests StrEnum for the `str, Enum` classes in contracts.py. Deliberately not
+#        taken: StrEnum changes what `str(member)` and f-string interpolation produce
+#        (the value, rather than "Class.MEMBER"), and these enums are serialised into the
+#        API response, written into Qdrant payloads and matched in existing indexes. The
+#        rewrite is a wire-format change dressed as a lint fix.
+ignore = ["E501", "B008", "UP042"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+ignore_missing_imports = true
