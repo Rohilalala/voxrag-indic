@@ -330,7 +330,7 @@ export function VoicePanel(props: VoicePanelProps) {
           variant="outline"
           onValueChange={(next) => {
             // Radix hands back "" when the pressed item is toggled off; a mode is required.
-            if (next === 'fast' || next === 'quality') setMode(next)
+            if (next === 'fast' || next === 'quality' || next === 'agentic') setMode(next)
           }}
           aria-label="Generation mode"
           className="h-9"
@@ -340,6 +340,9 @@ export function VoicePanel(props: VoicePanelProps) {
           </ToggleGroupItem>
           <ToggleGroupItem value="quality" className="h-9 px-3 text-xs" aria-label="Quality mode">
             quality
+          </ToggleGroupItem>
+          <ToggleGroupItem value="agentic" className="h-9 px-3 text-xs" aria-label="Agentic mode">
+            agentic
           </ToggleGroupItem>
         </ToggleGroup>
         <div className="ms-auto flex items-center gap-2">

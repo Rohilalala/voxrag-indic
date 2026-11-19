@@ -120,6 +120,8 @@ export const STAGES = [
   'retrieve_lexical',
   'fuse',
   'rerank',
+  'grade',
+  'rewrite',
   'generate',
   'output_guardrail',
   'total',
@@ -133,7 +135,7 @@ export const PIPELINE_STAGES = STAGES.filter(
   (s): s is Exclude<StageName, 'total' | 'core'> => s !== 'total' && s !== 'core',
 )
 
-export const GENERATION_MODES = ['fast', 'quality'] as const
+export const GENERATION_MODES = ['fast', 'quality', 'agentic'] as const
 export type GenerationMode = (typeof GENERATION_MODES)[number]
 
 export type RefusalReason =
