@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.datastructures import Headers
 from starlette.websockets import WebSocketDisconnect
 
 from voxrag.api import routes, ws
@@ -73,8 +74,8 @@ class TestRateLimit:
 
 
 class TestClientKey:
-    def conn(self, xff: str | None = None) -> SimpleNamespace:
-        headers = {"x-forwarded-for": xff} if xff is not None else {}
+    def conn(self, *xff: str) -> SimpleNamespace:
+        headers = Headers(raw=[(b"x-forwarded-for", line.encode()) for line in xff])
         return SimpleNamespace(headers=headers, client=SimpleNamespace(host="10.0.0.9"))
 
     def test_peer_address_by_default(self) -> None:
@@ -86,6 +87,18 @@ class TestClientKey:
         patch_settings(trusted_proxy_hops=1)
         # The client wrote 6.6.6.6 itself; the proxy appended the address it really saw.
         assert routes.client_key(self.conn("6.6.6.6, 203.0.113.7")) == "203.0.113.7"
+
+    def test_a_separate_proxy_line_is_not_hidden_by_the_clients_line(
+        self, patch_settings: Callable[..., None]
+    ) -> None:
+        patch_settings(trusted_proxy_hops=1)
+        assert routes.client_key(self.conn("6.6.6.6", "203.0.113.7")) == "203.0.113.7"
+
+    def test_a_non_address_falls_back_to_the_peer(
+        self, patch_settings: Callable[..., None]
+    ) -> None:
+        patch_settings(trusted_proxy_hops=1)
+        assert routes.client_key(self.conn("6.6.6.6, not-an-ip")) == "10.0.0.9"
 
     def test_missing_header_falls_back_to_the_peer(
         self, patch_settings: Callable[..., None]

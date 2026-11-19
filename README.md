@@ -20,7 +20,7 @@ All numbers come from this code, measured on the full 14-language index.
 | **Language routing** (40 real queries per language, no hint) | detection **99.6%** · refusal rate 5.7% |
 | **Grounding rail** (474 on-topic + 474 off-topic pairs) | catches **82.3%** of off-topic evidence at 4.4% false refusals |
 | **Answers, fast mode** (n = 168) | groundedness **1.000** · token F1 0.208 against an extractive ceiling of 0.684 |
-| **Tests** | 633 passing, hermetic: no network, no Qdrant, no model needed |
+| **Tests** | 635 passing, hermetic: no network, no Qdrant, no model needed |
 
 Retrieval is modest in absolute terms because MS MARCO grades one passage per query. Answer F1 is limited by the extractive generator, not by retrieval: perfect span selection tops out at 0.684 on this data.
 

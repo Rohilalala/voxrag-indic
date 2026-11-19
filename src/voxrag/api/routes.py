@@ -16,6 +16,8 @@ string that finds the request in the log, in the trace ring and in the analytics
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import ipaddress
 import logging
 import time
 from collections import deque
@@ -191,9 +193,13 @@ def client_key(conn: Any) -> str:
     """Who to count a call against: the address the nearest trusted proxy saw, else the peer."""
     hops = settings.trusted_proxy_hops
     if hops > 0:
-        chain = [h.strip() for h in conn.headers.get("x-forwarded-for", "").split(",") if h.strip()]
+        # Every header line, in order: a proxy may add its own line rather than merge, and
+        # the first line is then the client's.
+        joined = ",".join(conn.headers.getlist("x-forwarded-for"))
+        chain = [h.strip() for h in joined.split(",") if h.strip()]
         if len(chain) >= hops:
-            return chain[-hops]
+            with contextlib.suppress(ValueError):
+                return str(ipaddress.ip_address(chain[-hops]))
     return getattr(conn.client, "host", None) or "unknown"
 
 
