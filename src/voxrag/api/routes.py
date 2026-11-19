@@ -17,7 +17,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from collections import deque
 from typing import Annotated, Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
@@ -153,6 +156,63 @@ def _rid(request: Request) -> str:
     return getattr(request.state, "request_id", "unknown")
 
 
+def origin_allowed(origin: str | None, host: str | None) -> bool:
+    """Browsers send Origin on cross-site calls and websocket handshakes, so a page on
+    another site is refused here unless allowlisted. No Origin means a non-browser client,
+    which the rate limit covers instead."""
+    if not origin:
+        return True
+    if "*" in settings.cors_origins or origin in settings.cors_origins:
+        return True
+    return urlsplit(origin).netloc == (host or "")
+
+
+_HITS: dict[str, deque[float]] = {}
+
+
+def within_rate_limit(client: str, now: float | None = None) -> bool:
+    """Sliding one-minute window per client. Records the call when it is allowed."""
+    limit = settings.rate_limit_per_minute
+    if limit <= 0:
+        return True
+    now = time.monotonic() if now is None else now
+    hits = _HITS.setdefault(client, deque())
+    while hits and now - hits[0] >= 60.0:
+        hits.popleft()
+    if len(hits) >= limit:
+        return False
+    hits.append(now)
+    # ponytail: in-process and per-worker; move to Redis if this ever runs multi-replica.
+    if len(_HITS) > 10_000:
+        for key in [k for k, v in _HITS.items() if now - v[-1] >= 60.0]:
+            del _HITS[key]
+    return True
+
+
+def client_key(client: Any) -> str:
+    return getattr(client, "host", None) or "unknown"
+
+
+def _paid_call_refused(request: Request) -> JSONResponse | None:
+    if not origin_allowed(request.headers.get("origin"), request.headers.get("host")):
+        return JSONResponse(
+            status_code=403,
+            content=error_body(
+                _rid(request), PermissionError("origin not allowed"), error="Forbidden"
+            ),
+        )
+    if not within_rate_limit(client_key(request.client)):
+        return JSONResponse(
+            status_code=429,
+            content=error_body(
+                _rid(request),
+                RuntimeError("too many requests; try again in a minute"),
+                error="RateLimited",
+            ),
+        )
+    return None
+
+
 def _harness_or_error(request: Request) -> tuple[Any, JSONResponse | None]:
     harness = getattr(request.app.state, "harness", None)
     if harness is not None:
@@ -216,6 +276,8 @@ async def _read_upload(file: UploadFile) -> bytes:
 @router.post("/query")
 async def post_query(body: QueryRequest, request: Request) -> JSONResponse:
     """Text query through the full pipeline. Returns a PipelineResult."""
+    if (refused := _paid_call_refused(request)) is not None:
+        return refused
     rid = _rid(request)
     harness, failure = _harness_or_error(request)
     if failure is not None:
@@ -241,6 +303,8 @@ async def post_voice(
     mode: Annotated[str | None, Form()] = None,
 ) -> JSONResponse:
     """Voice query: speech-to-text, then the same pipeline as /api/query."""
+    if (refused := _paid_call_refused(request)) is not None:
+        return refused
     rid = _rid(request)
     harness, failure = _harness_or_error(request)
     if failure is not None:

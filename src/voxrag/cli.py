@@ -94,6 +94,8 @@ def _serve(argv: Sequence[str]) -> int:
         log_level=args.log_level.lower(),
         reload=args.reload,
         workers=None if (args.reload or args.workers <= 1) else args.workers,
+        ws_max_size=settings.ws_max_message_bytes,
+        ws_max_queue=2,  # frames buffered per socket before reading pauses
     )
     return 0
 

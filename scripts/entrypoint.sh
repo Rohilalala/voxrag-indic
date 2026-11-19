@@ -41,4 +41,6 @@ exec python -m uvicorn voxrag.api.app:app \
     --factory=false \
     --host "${VOXRAG_HOST:-0.0.0.0}" \
     --port "${VOXRAG_PORT:-8000}" \
+    --ws-max-size "${VOXRAG_WS_MAX_MESSAGE_BYTES:-8388608}" \
+    --ws-max-queue 2 \
     --log-level "$(echo "${VOXRAG_LOG_LEVEL:-info}" | tr '[:upper:]' '[:lower:]')"

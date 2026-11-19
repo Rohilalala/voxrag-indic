@@ -41,7 +41,16 @@ from typing import Any, Final
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from voxrag.api import error_body, run_audio
-from voxrag.api.routes import MAX_AUDIO_BYTES, coerce_lang, coerce_mode, sniff_mime
+from voxrag.api.routes import (
+    MAX_AUDIO_BYTES,
+    client_key,
+    coerce_lang,
+    coerce_mode,
+    origin_allowed,
+    sniff_mime,
+    within_rate_limit,
+)
+from voxrag.config import settings
 from voxrag.contracts import PipelineResult, StageName
 
 log = logging.getLogger(__name__)
@@ -56,6 +65,12 @@ _STREAMABLE: Final[frozenset[str]] = frozenset({"stage", "transcript", "token"})
 #: which is a client bug worth reporting rather than a reason to drop the connection.
 _END: Final[object] = object()
 _BAD_JSON: Final[object] = object()
+
+#: Frames waiting while a turn runs. Bounded so a client that keeps sending cannot grow
+#: server memory: the reader stops reading, and the socket pushes back on the sender.
+_INBOUND_MAX: Final[int] = 2
+
+_open_sockets = 0
 
 
 def _normalize(*event: Any) -> dict[str, Any] | None:
@@ -154,13 +169,18 @@ async def _reader(ws: WebSocket, inbound: asyncio.Queue[Any], closed: asyncio.Ev
                 blob = message.get("bytes") or b""
                 raw = blob.decode("utf-8", "replace")
             try:
-                inbound.put_nowait(json.loads(raw))
+                frame = json.loads(raw)
             except ValueError:
-                inbound.put_nowait(_BAD_JSON)
+                frame = _BAD_JSON
+            await inbound.put(frame)
     except (WebSocketDisconnect, RuntimeError) as exc:
         log.debug("ws reader stopped: %r", exc)
     finally:
         closed.set()
+        # Nothing still queued matters once the client is gone, so make room for _END
+        # rather than block on a full queue.
+        if inbound.full():
+            inbound.get_nowait()
         inbound.put_nowait(_END)
 
 
@@ -181,6 +201,23 @@ async def _pump(ws: WebSocket, outbound: asyncio.Queue[Any]) -> None:
 
 @ws_router.websocket("/ws/voice")
 async def voice_ws(websocket: WebSocket) -> None:
+    global _open_sockets
+    # Closing before accept refuses the handshake: a page on another site cannot drive
+    # this socket, and a flood of sockets cannot hold unbounded buffers.
+    if not origin_allowed(websocket.headers.get("origin"), websocket.headers.get("host")):
+        await websocket.close(code=1008)
+        return
+    if _open_sockets >= settings.ws_max_connections:
+        await websocket.close(code=1013)
+        return
+    _open_sockets += 1
+    try:
+        await _serve_voice(websocket)
+    finally:
+        _open_sockets -= 1
+
+
+async def _serve_voice(websocket: WebSocket) -> None:
     await websocket.accept()
     # The HTTP request-id middleware does not run for websockets. This id identifies the
     # *connection* in the log; each audio turn mints its own request id, because each turn
@@ -194,7 +231,7 @@ async def voice_ws(websocket: WebSocket) -> None:
         await websocket.close(code=1011)
         return
 
-    inbound: asyncio.Queue[Any] = asyncio.Queue()
+    inbound: asyncio.Queue[Any] = asyncio.Queue(maxsize=_INBOUND_MAX)
     closed = asyncio.Event()
     reader = asyncio.create_task(_reader(websocket, inbound, closed))
 
@@ -213,6 +250,12 @@ async def voice_ws(websocket: WebSocket) -> None:
             if kind != "audio":
                 await _safe_send(
                     websocket, {"type": "error", "message": f"unsupported message type {kind!r}"}
+                )
+                continue
+            if not within_rate_limit(client_key(websocket.client)):
+                await _safe_send(
+                    websocket,
+                    {"type": "error", "message": "too many requests; try again in a minute"},
                 )
                 continue
 

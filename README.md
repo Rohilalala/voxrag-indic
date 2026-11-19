@@ -20,7 +20,7 @@ All numbers come from this code, measured on the full 14-language index.
 | **Language routing** (40 real queries per language, no hint) | detection **99.6%** · refusal rate 5.7% |
 | **Grounding rail** (474 on-topic + 474 off-topic pairs) | catches **82.3%** of off-topic evidence at 4.4% false refusals |
 | **Answers, fast mode** (n = 168) | groundedness **1.000** · token F1 0.208 against an extractive ceiling of 0.684 |
-| **Tests** | 611 passing, hermetic: no network, no Qdrant, no model needed |
+| **Tests** | 626 passing, hermetic: no network, no Qdrant, no model needed |
 
 Retrieval is modest in absolute terms because MS MARCO grades one passage per query. Answer F1 is limited by the extractive generator, not by retrieval: perfect span selection tops out at 0.684 on this data.
 
@@ -71,6 +71,8 @@ scripts/verify_sarvam.sh                                      # live STT round t
 ## Deploy
 
 The `Dockerfile` builds the UI and serves the fast path on port 8000; mount a volume at `/app/data` so the corpus and index survive redeploys. The container does not ship the 9.6 GB generator: point `VOXRAG_HOSTED_GENERATOR_URL` at a hosted model for quality mode. `scripts/railway_setup.sh` sets up a Railway service end to end.
+
+Speech-to-text costs money per call, so the paid endpoints (`/api/query`, `/api/voice`, `/ws/voice`) refuse browser calls from other sites unless they are listed in `VOXRAG_CORS_ORIGINS`, and allow 30 calls per client per minute (`VOXRAG_RATE_LIMIT_PER_MINUTE`). Behind a proxy, set `FORWARDED_ALLOW_IPS` to the proxy's address so the limit applies per user rather than per proxy. Websockets are capped at 16 connections and 8 MB frames.
 
 ## Layout
 
