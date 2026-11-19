@@ -508,12 +508,18 @@ class Settings(BaseSettings):
         ]
     )
     #: Paid calls (text query, voice query, websocket audio turn) per client per minute.
-    #: 0 disables. Behind a proxy, set FORWARDED_ALLOW_IPS so uvicorn sees the real client.
+    #: 0 disables.
     rate_limit_per_minute: int = 30
+    #: Proxies in front of the server that append to X-Forwarded-For. 0 keys clients by the
+    #: socket peer. Behind one proxy, 1 keys them by the entry that proxy appended -- never
+    #: the leftmost entry, which the client writes itself.
+    trusted_proxy_hops: int = 0
     ws_max_connections: int = 16
     ws_max_connections_per_client: int = 4
-    #: A socket that runs no audio turn for this long is closed; keepalives do not count.
+    #: A socket that completes no audio turn for this long is closed; keepalives and
+    #: rejected frames do not count. No socket outlives ws_max_lifetime_s either way.
     ws_idle_timeout_s: float = 120.0
+    ws_max_lifetime_s: float = 1800.0
     #: Largest websocket frame uvicorn accepts. A voice query is a few hundred KB of opus;
     #: base64 adds a third.
     ws_max_message_bytes: int = 8 * 1024 * 1024

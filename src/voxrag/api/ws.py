@@ -207,7 +207,7 @@ async def voice_ws(websocket: WebSocket) -> None:
     if not origin_allowed(websocket.headers.get("origin")):
         await websocket.close(code=1008)
         return
-    client = client_key(websocket.client)
+    client = client_key(websocket)
     if (
         sum(_open_by_client.values()) >= settings.ws_max_connections
         or _open_by_client.get(client, 0) >= settings.ws_max_connections_per_client
@@ -241,8 +241,10 @@ async def _serve_voice(websocket: WebSocket) -> None:
     closed = asyncio.Event()
     reader = asyncio.create_task(_reader(websocket, inbound, closed))
     loop = asyncio.get_running_loop()
-    # Only an audio turn moves the deadline, so keepalives cannot hold a slot forever.
-    deadline = loop.time() + settings.ws_idle_timeout_s
+    # Only a completed audio turn moves the deadline, so keepalives and junk frames cannot
+    # hold a slot, and nothing moves it past the socket's maximum lifetime.
+    hard_stop = loop.time() + settings.ws_max_lifetime_s
+    deadline = min(loop.time() + settings.ws_idle_timeout_s, hard_stop)
 
     try:
         while True:
@@ -268,15 +270,15 @@ async def _serve_voice(websocket: WebSocket) -> None:
                     websocket, {"type": "error", "message": f"unsupported message type {kind!r}"}
                 )
                 continue
-            if not within_rate_limit(client_key(websocket.client)):
+            if not within_rate_limit(client_key(websocket)):
                 await _safe_send(
                     websocket,
                     {"type": "error", "message": "too many requests; try again in a minute"},
                 )
                 continue
 
-            await _handle_audio(websocket, harness, message, closed)
-            deadline = loop.time() + settings.ws_idle_timeout_s
+            if await _handle_audio(websocket, harness, message, closed):
+                deadline = min(loop.time() + settings.ws_idle_timeout_s, hard_stop)
     except WebSocketDisconnect:
         return
     except Exception as exc:  # never let the socket die without saying why
@@ -292,8 +294,9 @@ async def _serve_voice(websocket: WebSocket) -> None:
 
 async def _handle_audio(
     websocket: WebSocket, harness: Any, message: dict[str, Any], closed: asyncio.Event
-) -> None:
-    """Run one audio turn, streaming frames as the harness produces them."""
+) -> bool:
+    """Run one audio turn, streaming frames as the harness produces them. True only when
+    the pipeline produced a result."""
     request_id = uuid.uuid4().hex[:12]
     try:
         audio = _decode_audio(message.get("data"))
@@ -303,7 +306,7 @@ async def _handle_audio(
         await _safe_send(
             websocket, {"type": "error", "message": str(exc), "request_id": request_id}
         )
-        return
+        return False
 
     mime = sniff_mime(message.get("mime"), message.get("filename"), audio[:16])
 
@@ -356,7 +359,7 @@ async def _handle_audio(
         await _safe_send(
             websocket, {"type": "error", **error_body(request_id, exc, stage="pipeline")}
         )
-        return
+        return False
     finally:
         gone.cancel()
         outbound.put_nowait(_END)
@@ -368,6 +371,7 @@ async def _handle_audio(
     for frame in _fallback_frames(result, streamed):
         await _safe_send(websocket, frame)
     await _safe_send(websocket, {"type": "result", "result": result.model_dump(mode="json")})
+    return True
 
 
 async def _safe_send(websocket: WebSocket, frame: dict[str, Any]) -> None:

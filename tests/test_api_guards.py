@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Iterator
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -69,6 +70,28 @@ class TestRateLimit:
     def test_zero_disables(self, patch_settings: Callable[..., None]) -> None:
         patch_settings(rate_limit_per_minute=0)
         assert all(routes.within_rate_limit("a", now=0) for _ in range(100))
+
+
+class TestClientKey:
+    def conn(self, xff: str | None = None) -> SimpleNamespace:
+        headers = {"x-forwarded-for": xff} if xff is not None else {}
+        return SimpleNamespace(headers=headers, client=SimpleNamespace(host="10.0.0.9"))
+
+    def test_peer_address_by_default(self) -> None:
+        assert routes.client_key(self.conn("6.6.6.6")) == "10.0.0.9"
+
+    def test_behind_one_proxy_the_entry_it_appended_counts(
+        self, patch_settings: Callable[..., None]
+    ) -> None:
+        patch_settings(trusted_proxy_hops=1)
+        # The client wrote 6.6.6.6 itself; the proxy appended the address it really saw.
+        assert routes.client_key(self.conn("6.6.6.6, 203.0.113.7")) == "203.0.113.7"
+
+    def test_missing_header_falls_back_to_the_peer(
+        self, patch_settings: Callable[..., None]
+    ) -> None:
+        patch_settings(trusted_proxy_hops=1)
+        assert routes.client_key(self.conn()) == "10.0.0.9"
 
 
 class TestHttpGuards:
@@ -139,6 +162,31 @@ class TestWebsocketGuards:
         patch_settings(ws_max_connections=0)
         with pytest.raises(WebSocketDisconnect), api().websocket_connect("/ws/voice"):
             pass
+
+    def test_socket_lifetime_is_capped(self, patch_settings: Callable[..., None]) -> None:
+        patch_settings(ws_idle_timeout_s=60.0, ws_max_lifetime_s=0.05)
+        with (
+            api(harness=object()).websocket_connect("/ws/voice") as sock,
+            pytest.raises(WebSocketDisconnect) as closed,
+        ):
+            sock.receive_json()
+        assert closed.value.code == 1000
+
+
+class RecordingSocket:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+
+    async def send_json(self, frame: dict[str, Any]) -> None:
+        self.sent.append(frame)
+
+
+async def test_a_rejected_audio_frame_is_not_a_turn() -> None:
+    # Only a completed turn resets the idle deadline, so junk audio cannot hold a slot open.
+    sock = RecordingSocket()
+    ran = await ws._handle_audio(sock, object(), {"type": "audio", "data": ""}, asyncio.Event())  # type: ignore[arg-type]
+    assert ran is False
+    assert sock.sent and sock.sent[0]["type"] == "error"
 
 
 class FloodSocket:

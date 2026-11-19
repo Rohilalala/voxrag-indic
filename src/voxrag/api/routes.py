@@ -187,8 +187,14 @@ def within_rate_limit(client: str, now: float | None = None) -> bool:
     return True
 
 
-def client_key(client: Any) -> str:
-    return getattr(client, "host", None) or "unknown"
+def client_key(conn: Any) -> str:
+    """Who to count a call against: the address the nearest trusted proxy saw, else the peer."""
+    hops = settings.trusted_proxy_hops
+    if hops > 0:
+        chain = [h.strip() for h in conn.headers.get("x-forwarded-for", "").split(",") if h.strip()]
+        if len(chain) >= hops:
+            return chain[-hops]
+    return getattr(conn.client, "host", None) or "unknown"
 
 
 def _paid_call_refused(request: Request) -> JSONResponse | None:
@@ -201,7 +207,7 @@ def _paid_call_refused(request: Request) -> JSONResponse | None:
                 error="Forbidden",
             ),
         )
-    if not within_rate_limit(client_key(request.client)):
+    if not within_rate_limit(client_key(request)):
         return JSONResponse(
             status_code=429,
             content=error_body(

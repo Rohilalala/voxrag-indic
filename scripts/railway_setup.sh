@@ -224,13 +224,14 @@ railway variable set \
     "VOXRAG_DEFAULT_MODE=fast" \
     "PORT=${API_PORT}" \
     'VOXRAG_CORS_ORIGINS=["https://${{RAILWAY_PUBLIC_DOMAIN}}"]' \
-    "FORWARDED_ALLOW_IPS=*" \
+    "VOXRAG_TRUSTED_PROXY_HOPS=1" \
     --service "$API_SERVICE" --skip-deploys >/dev/null
 info "VOXRAG_QDRANT_URL -> ${QDRANT_URL}"
 # The paid endpoints only answer allowlisted browser origins, so the service's own domain is
-# listed. The container is reachable only through Railway's edge proxy, so trusting its
-# X-Forwarded-For is what makes the per-client rate limit per user rather than per proxy.
-info "VOXRAG_CORS_ORIGINS -> the service's public domain; FORWARDED_ALLOW_IPS=* (edge proxy)"
+# listed. Requests arrive through Railway's edge proxy, so limits key on the address it
+# appends to X-Forwarded-For (the last entry), never on entries the client wrote. If another
+# hop is ever added, the key becomes the proxy's own address: one shared limit, not a bypass.
+info "VOXRAG_CORS_ORIGINS -> the service's public domain; VOXRAG_TRUSTED_PROXY_HOPS=1 (edge proxy)"
 info "PORT=${API_PORT} (matches EXPOSE in the Dockerfile; tells the edge proxy where to go)"
 
 # --------------------------------------------------------------------------------------
