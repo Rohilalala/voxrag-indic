@@ -20,7 +20,6 @@ import logging
 import time
 from collections import deque
 from typing import Annotated, Any
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
@@ -156,15 +155,14 @@ def _rid(request: Request) -> str:
     return getattr(request.state, "request_id", "unknown")
 
 
-def origin_allowed(origin: str | None, host: str | None) -> bool:
-    """Browsers send Origin on cross-site calls and websocket handshakes, so a page on
-    another site is refused here unless allowlisted. No Origin means a non-browser client,
-    which the rate limit covers instead."""
+def origin_allowed(origin: str | None) -> bool:
+    """Browsers send Origin on cross-site calls and websocket handshakes, so a page that is
+    not allowlisted is refused here. No Origin means a non-browser client, which the rate
+    limit covers instead. Origin == Host is deliberately not accepted: under DNS rebinding
+    a hostile page's Origin and Host both name the attacker's domain."""
     if not origin:
         return True
-    if "*" in settings.cors_origins or origin in settings.cors_origins:
-        return True
-    return urlsplit(origin).netloc == (host or "")
+    return "*" in settings.cors_origins or origin in settings.cors_origins
 
 
 _HITS: dict[str, deque[float]] = {}
@@ -194,11 +192,13 @@ def client_key(client: Any) -> str:
 
 
 def _paid_call_refused(request: Request) -> JSONResponse | None:
-    if not origin_allowed(request.headers.get("origin"), request.headers.get("host")):
+    if not origin_allowed(request.headers.get("origin")):
         return JSONResponse(
             status_code=403,
             content=error_body(
-                _rid(request), PermissionError("origin not allowed"), error="Forbidden"
+                _rid(request),
+                PermissionError("origin not allowed; add it to VOXRAG_CORS_ORIGINS"),
+                error="Forbidden",
             ),
         )
     if not within_rate_limit(client_key(request.client)):

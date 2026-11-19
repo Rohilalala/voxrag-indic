@@ -26,33 +26,32 @@ def fresh_limits(patch_settings: Callable[..., None]) -> Iterator[None]:
     routes._HITS.clear()
 
 
-def api() -> TestClient:
-    """The real routers with no harness loaded: anything that gets past the guards is a 503."""
+def api(harness: Any = None) -> TestClient:
+    """The real routers. With no harness, anything that gets past the guards is a 503; with
+    a stand-in one, a websocket stays open waiting for audio."""
     app = FastAPI()
     app.include_router(routes.router)
     app.include_router(ws.ws_router)
+    app.state.harness = harness
     return TestClient(app)
 
 
 class TestOrigin:
     def test_no_origin_is_a_non_browser_client(self) -> None:
-        assert routes.origin_allowed(None, "api.example")
-
-    def test_same_origin(self) -> None:
-        assert routes.origin_allowed("https://api.example", "api.example")
+        assert routes.origin_allowed(None)
 
     def test_allowlisted_dev_server(self) -> None:
-        assert routes.origin_allowed("http://localhost:5173", "127.0.0.1:8000")
+        assert routes.origin_allowed("http://localhost:5173")
 
     def test_foreign_site_refused(self) -> None:
-        assert not routes.origin_allowed("https://evil.example", "api.example")
+        assert not routes.origin_allowed("https://evil.example")
 
     def test_sandboxed_null_origin_refused(self) -> None:
-        assert not routes.origin_allowed("null", "api.example")
+        assert not routes.origin_allowed("null")
 
     def test_wildcard_opens_it_to_every_site(self, patch_settings: Callable[..., None]) -> None:
         patch_settings(cors_origins=["*"])
-        assert routes.origin_allowed("https://evil.example", "api.example")
+        assert routes.origin_allowed("https://evil.example")
 
 
 class TestRateLimit:
@@ -88,6 +87,15 @@ class TestHttpGuards:
         )
         assert response.status_code == 403
 
+    def test_matching_host_is_not_trusted(self) -> None:
+        # DNS rebinding: the hostile page's Origin and the Host it sends name the same domain.
+        response = api().post(
+            "/api/query",
+            json={"text": "hi"},
+            headers={"origin": "http://rebind.example:8000", "host": "rebind.example:8000"},
+        )
+        assert response.status_code == 403
+
     def test_over_the_limit_returns_429(self, patch_settings: Callable[..., None]) -> None:
         patch_settings(rate_limit_per_minute=1)
         client = api()
@@ -103,9 +111,29 @@ class TestWebsocketGuards:
         ):
             pass
 
-    def test_same_origin_handshake_is_accepted(self) -> None:
+    def test_allowlisted_handshake_is_accepted(self, patch_settings: Callable[..., None]) -> None:
+        patch_settings(cors_origins=["http://testserver"])
         with api().websocket_connect("/ws/voice", headers={"origin": "http://testserver"}) as sock:
             assert "pipeline unavailable" in sock.receive_json()["message"]
+
+    def test_one_client_cannot_take_every_slot(self, patch_settings: Callable[..., None]) -> None:
+        patch_settings(ws_max_connections_per_client=1)
+        client = api(harness=object())
+        with (
+            client.websocket_connect("/ws/voice"),
+            pytest.raises(WebSocketDisconnect),
+            client.websocket_connect("/ws/voice"),
+        ):
+            pass
+        assert ws._open_by_client == {}  # the slot is released on close
+
+    def test_idle_socket_is_closed(self, patch_settings: Callable[..., None]) -> None:
+        patch_settings(ws_idle_timeout_s=0.05)
+        with api(harness=object()).websocket_connect("/ws/voice") as sock:
+            sock.send_json({"type": "ping"})  # keepalives do not extend the deadline
+            with pytest.raises(WebSocketDisconnect) as closed:
+                sock.receive_json()
+        assert closed.value.code == 1000
 
     def test_connection_cap(self, patch_settings: Callable[..., None]) -> None:
         patch_settings(ws_max_connections=0)

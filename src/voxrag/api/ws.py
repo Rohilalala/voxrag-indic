@@ -70,7 +70,8 @@ _BAD_JSON: Final[object] = object()
 #: server memory: the reader stops reading, and the socket pushes back on the sender.
 _INBOUND_MAX: Final[int] = 2
 
-_open_sockets = 0
+#: Open sockets per client, so one client cannot take every slot.
+_open_by_client: dict[str, int] = {}
 
 
 def _normalize(*event: Any) -> dict[str, Any] | None:
@@ -201,20 +202,25 @@ async def _pump(ws: WebSocket, outbound: asyncio.Queue[Any]) -> None:
 
 @ws_router.websocket("/ws/voice")
 async def voice_ws(websocket: WebSocket) -> None:
-    global _open_sockets
     # Closing before accept refuses the handshake: a page on another site cannot drive
     # this socket, and a flood of sockets cannot hold unbounded buffers.
-    if not origin_allowed(websocket.headers.get("origin"), websocket.headers.get("host")):
+    if not origin_allowed(websocket.headers.get("origin")):
         await websocket.close(code=1008)
         return
-    if _open_sockets >= settings.ws_max_connections:
+    client = client_key(websocket.client)
+    if (
+        sum(_open_by_client.values()) >= settings.ws_max_connections
+        or _open_by_client.get(client, 0) >= settings.ws_max_connections_per_client
+    ):
         await websocket.close(code=1013)
         return
-    _open_sockets += 1
+    _open_by_client[client] = _open_by_client.get(client, 0) + 1
     try:
         await _serve_voice(websocket)
     finally:
-        _open_sockets -= 1
+        _open_by_client[client] -= 1
+        if not _open_by_client[client]:
+            del _open_by_client[client]
 
 
 async def _serve_voice(websocket: WebSocket) -> None:
@@ -234,10 +240,20 @@ async def _serve_voice(websocket: WebSocket) -> None:
     inbound: asyncio.Queue[Any] = asyncio.Queue(maxsize=_INBOUND_MAX)
     closed = asyncio.Event()
     reader = asyncio.create_task(_reader(websocket, inbound, closed))
+    loop = asyncio.get_running_loop()
+    # Only an audio turn moves the deadline, so keepalives cannot hold a slot forever.
+    deadline = loop.time() + settings.ws_idle_timeout_s
 
     try:
         while True:
-            message = await inbound.get()
+            try:
+                message = await asyncio.wait_for(
+                    inbound.get(), timeout=max(0.0, deadline - loop.time())
+                )
+            except TimeoutError:
+                with contextlib.suppress(RuntimeError):
+                    await websocket.close(code=1000, reason="idle")
+                return
             if message is _END:
                 return  # client disconnected
             if message is _BAD_JSON:
@@ -260,6 +276,7 @@ async def _serve_voice(websocket: WebSocket) -> None:
                 continue
 
             await _handle_audio(websocket, harness, message, closed)
+            deadline = loop.time() + settings.ws_idle_timeout_s
     except WebSocketDisconnect:
         return
     except Exception as exc:  # never let the socket die without saying why
